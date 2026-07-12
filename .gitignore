@@ -1,0 +1,23 @@
+# Build artifacts (standalone core test builds, IDE/CMake output)
+build/
+out/
+cmake-build-*/
+*.o
+*.a
+*.so
+*.exe
+CMakeCache.txt
+CMakeFiles/
+compile_commands.json
+
+# Live configs (only the .dist templates are tracked)
+conf/*.conf
+!conf/*.conf.dist
+
+# Editor / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+**/__pycache__/
