@@ -1,5 +1,6 @@
 #include "ReforgeMgr.h"
 #include "ReforgeStatMap.h"
+#include "reforge/Charge.h"
 #include "reforge/Currency.h"
 #include "reforge/Reitemize.h"
 
@@ -34,9 +35,11 @@ namespace Reforge
         // there by definition; the addon/command path is gated here). Off => reforge from anywhere.
         bool NearReforger(Player* player, ServerReforgeConfig const& cfg)
         {
-            if (!cfg.RequireNpc())
-                return true;
-            return player->FindNearestCreature(cfg.NpcEntry(), cfg.NpcRange()) != nullptr;
+            // Only probe for the NPC when the gate is on (preserves the short-circuit); the pure
+            // ReforgeAllowedHere decides from the two booleans.
+            bool const npcInRange = cfg.RequireNpc()
+                && player->FindNearestCreature(cfg.NpcEntry(), cfg.NpcRange()) != nullptr;
+            return ReforgeAllowedHere(cfg.RequireNpc(), npcInRange);
         }
     }
 
@@ -141,7 +144,7 @@ namespace Reforge
             return false;
         }
 
-        uint32_t const cap = static_cast<uint32_t>(static_cast<double>(block.Get(from)) * _config.ReforgeMaxFraction());
+        uint32_t const cap = ReforgeCap(block.Get(from), _config.ReforgeMaxFraction());
         if (amount == 0 || amount > cap)
         {
             outMsg = Acore::StringFormat("You may move at most {} {} (= {}% of {}).",
@@ -158,32 +161,30 @@ namespace Reforge
             return false;
         }
 
-        // Resolve the chosen currency and verify funds BEFORE charging anything.
-        std::optional<CurrencyCost> const cost = FindCost(_config.AcceptedCurrencies(), currencyEntry);
-        if (!cost)
+        // Resolve the chosen currency and verify funds BEFORE charging anything. The decision (accepted?
+        // affordable?) is the pure core's (PlanCharge); the adapter only reads the balance and, on Ok,
+        // performs the matching deduction.
+        bool const isGold = currencyEntry == 0;
+        uint64 const playerHas = isGold ? player->GetMoney() : player->GetItemCount(currencyEntry);
+        ChargePlan const plan = PlanCharge(_config.AcceptedCurrencies(), currencyEntry, playerHas);
+        if (plan.status == ChargeStatus::NotAccepted)
         {
             outMsg = "That is not an accepted currency here.";
             return false;
         }
-        if (cost->entry == 0)
+        if (plan.status == ChargeStatus::Insufficient)
         {
-            if (!player->HasEnoughMoney(static_cast<uint32>(cost->count)))
-            {
-                outMsg = Acore::StringFormat("Reforging costs {}.", MoneyStr(cost->count));
-                return false;
-            }
-        }
-        else if (!player->HasItemCount(cost->entry, cost->count))
-        {
-            outMsg = Acore::StringFormat("Reforging costs {}x {}.", cost->count, ItemName(cost->entry));
+            outMsg = isGold
+                ? Acore::StringFormat("Reforging costs {}.", MoneyStr(plan.amount))
+                : Acore::StringFormat("Reforging costs {}x {}.", plan.amount, ItemName(currencyEntry));
             return false;
         }
 
         // Charge.
-        if (cost->entry == 0)
-            player->ModifyMoney(-static_cast<int32>(cost->count));
+        if (isGold)
+            player->ModifyMoney(-static_cast<int32>(plan.amount));
         else
-            player->DestroyItemCount(cost->entry, cost->count, true);
+            player->DestroyItemCount(currencyEntry, plan.amount, true);
 
         // Apply the stat vehicle: remove old mods, update cache + prismatic marker, re-apply.
         uint32_t const key = item->GetGUID().GetCounter();
