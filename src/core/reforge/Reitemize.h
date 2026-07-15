@@ -25,8 +25,9 @@ namespace Reforge
     // budget yields a zeroed block — the host is expected to supply weights.
     StatBlock ArchetypeTemplate(ItemChassis const& chassis, IReforgeConfig const& cfg);
 
-    // A single player-directed reforge: move `amount` points from `from` into `to`.
-    struct Reforge
+    // A single player-directed reforge: move `amount` points from `from` into `to`. Named ReforgeOp
+    // (not Reforge) so it never collides with the enclosing `Reforge` namespace under `using`.
+    struct ReforgeOp
     {
         ItemStat from = ItemStat::Spirit;
         ItemStat to   = ItemStat::HitRating;
@@ -56,7 +57,7 @@ namespace Reforge
     //   - `amount` exceeds floor(base.Get(from) * ReforgeMaxFraction())  — the bounded-fraction rule.
     // On success the block TOTAL is invariant: points are moved, never created, so the item's budget
     // (and thus its power level) is conserved. `base` is never mutated.
-    std::optional<StatBlock> ApplyReforge(StatBlock const& base, Reforge const& reforge,
+    std::optional<StatBlock> ApplyReforge(StatBlock const& base, ReforgeOp const& reforge,
                                           ItemChassis const& chassis, IReforgeConfig const& cfg);
 }
 
