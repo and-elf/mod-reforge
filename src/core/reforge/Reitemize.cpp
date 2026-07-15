@@ -1,4 +1,5 @@
 #include "Reitemize.h"
+#include "Charge.h"
 #include <array>
 #include <cstddef>
 
@@ -83,9 +84,9 @@ namespace Reforge
         if (reforge.amount == 0 || reforge.amount > available)
             return std::nullopt;
 
-        // Bounded fraction: at most floor(available * MaxFraction) may move in one reforge.
-        uint32_t const cap = static_cast<uint32_t>(static_cast<double>(available) * cfg.ReforgeMaxFraction());
-        if (reforge.amount > cap)
+        // Bounded fraction: at most floor(available * MaxFraction) may move in one reforge. Shared with
+        // every adapter pre-check via ReforgeCap so the bound never drifts across paths.
+        if (reforge.amount > ReforgeCap(available, cfg.ReforgeMaxFraction()))
             return std::nullopt;
 
         // Move the points — total is conserved, so the item's budget is unchanged.
