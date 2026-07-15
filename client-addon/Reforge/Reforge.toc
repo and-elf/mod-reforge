@@ -1,0 +1,9 @@
+## Interface: 30300
+## Title: Reforge
+## Notes: Reforge equipped item stats, paying any accepted currency.
+## Author: mod-reforge
+## Version: 1.0.0
+## SavedVariablesPerCharacter: ReforgeDB
+
+Comms.lua
+Panel.lua

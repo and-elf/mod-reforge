@@ -70,7 +70,7 @@ namespace Reforge
         return { ArchetypeTemplate(chassis, cfg), ResolveSockets(chassis, cfg) };
     }
 
-    std::optional<StatBlock> ApplyReforge(StatBlock const& base, Reforge const& reforge,
+    std::optional<StatBlock> ApplyReforge(StatBlock const& base, ReforgeOp const& reforge,
                                           ItemChassis const& chassis, IReforgeConfig const& cfg)
     {
         if (reforge.to == reforge.from)

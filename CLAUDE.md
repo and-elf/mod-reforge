@@ -12,8 +12,14 @@ a failing test exist. Keep `src/core/` free of AzerothCore headers (the pure-cor
 ## Layout
 
 - `src/core/reforge/` — pure C++20 logic (namespace `Reforge`): `Stats.h`, `ReforgeConfig.h`,
-  `Reitemize.{h,cpp}`. No AzerothCore includes here — ever.
-- `src/` (root) — thin server adapters (future: enchant-slot stat vehicle, reforge NPC, persistence).
+  `Reitemize.{h,cpp}`, `Currency.{h,cpp}` (any-currency parse), `Protocol.{h,cpp}` (addon wire codec).
+  No AzerothCore includes here — ever.
+- `src/` (root) — thin server adapters: `mod_reforge_loader`, `ServerReforgeConfig`, `ReforgeStatMap`
+  (ItemStat⇄ItemModType + chassis build), `ReforgeMgr` (ops/persistence/currency/stat vehicle),
+  `Reforge{Setup,Vehicle,Gossip,Command,Addon}Scripts`. Loader entrypoint: `Addmod_reforgeScripts()`.
+- `client-addon/Reforge/` — the `/reforge` Lua UI (mirrors `core/reforge/Protocol` grammar).
+- `data/sql/` — `db-world` (enchant pool + NPC), `db-characters` (`character_item_reforge`), `db-auth`
+  (RBAC perm). `conf/` — `mod_reforge.conf.dist`.
 - `tests/standalone/` — self-contained GoogleTest build (`reforge_core_tests`); `tests/fakes/` DI doubles.
 
 ## Fast test loop

@@ -75,8 +75,9 @@ struct ReitemizedItem { StatBlock stats; SocketLayout sockets; };
 ReitemizedItem Reitemize(ItemChassis const&, IReforgeConfig const&);
 
 // Player-directed reforge: move `amount` from `from` to `to`. nullopt if illegal (see §5).
-struct Reforge { ItemStat from; ItemStat to; uint32 amount; };
-std::optional<StatBlock> ApplyReforge(StatBlock const& base, Reforge const&, ItemChassis const&, IReforgeConfig const&);
+// Named ReforgeOp, not Reforge, to avoid colliding with the `Reforge` namespace under `using`.
+struct ReforgeOp { ItemStat from; ItemStat to; uint32 amount; };
+std::optional<StatBlock> ApplyReforge(StatBlock const& base, ReforgeOp const&, ItemChassis const&, IReforgeConfig const&);
 ```
 
 `IReforgeConfig` (injected): `ReforgeMaxFraction()`, `StatWeight(archetype,stat)`,
@@ -135,10 +136,118 @@ Fast loop: `cmake -S tests/standalone -B build && cmake --build build && ctest -
 
 ## 7. Build order (sequencing)
 
-1. **Slice 1 — Re-itemisation engine** ✓ (this doc): `ArchetypeTemplate`, `ResolveSockets`,
+1. **Slice 1 — Re-itemisation engine** ✓: `ArchetypeTemplate`, `ResolveSockets`,
    `Reitemize`, `ApplyReforge` + 20 tests. Pure, host-agnostic.
-2. **Slice 2 — Server adapter:** the stat-carrying **enchant-slot vehicle** (per-item stats without a
-   client patch), the reforge NPC/command surface, socket grant, per-item persistence, `IReforgeConfig`
-   over `sConfigMgr` + itemisation tables.
+2. **Slice 2 — Server adapter** ✓ (§8–§11): the stat-carrying **enchant-slot vehicle** (per-item stats
+   without a client patch), the reforge NPC/command surface, per-item persistence, `IReforgeConfig`
+   over `sConfigMgr`, a **client addon** (player-directed reforge paying **any currency**), and its
+   pure wire codec.
 3. **Slice 3 — Host integration seam:** a bridge interface so a policy module (mod-branding) supplies
-   budget/archetype/cost/socket policy and consumes `ReitemizedItem`.
+   budget/archetype/cost/socket policy and consumes `ReitemizedItem` (future).
+
+---
+
+## 8. Server adapter (`src/`)
+
+The adapter is the only place AzerothCore headers appear. It keeps the same discipline as the pure
+core: no long-lived `Player*`/`Item*` (resolve from `ObjectGuid` at use), config snapshotted from
+`sConfigMgr`, `PreparedStatement` for persistence, typed helpers, `{}`-format logging.
+
+```
+src/
+├── mod_reforge_loader.{h,cpp}   # Addmod_reforgeScripts() → fans out to each feature's AddSC
+├── ServerReforgeConfig.{h,cpp}  # production IReforgeConfig over sConfigMgr (snapshot on load/reload)
+├── ReforgeStatMap.{h,cpp}       # ItemStat ⇄ ItemModType mapping (the ONE AC-enum bridge)
+├── ItemChassisBuilder.{h,cpp}   # live Item → StatBlock + ItemChassis (native proto stats)
+├── ReforgeMgr.{h,cpp}           # apply/clear a reforge, currency charge, persistence, cache
+├── ReforgeVehicleScripts.cpp    # PlayerScript: the two stat-apply hooks (the enchant-slot vehicle)
+├── ReforgeGossipScripts.cpp     # Reforge NPC gossip (works without the addon)
+├── ReforgeCommandScripts.cpp    # `.reforge …` — also the client addon's inbound API
+└── ReforgeAddonScripts.cpp      # WorldScript/PlayerScript: config load + LANG_ADDON state pushes
+```
+
+`ReforgeMgr` is a singleton (`sReforgeMgr`) holding the config snapshot and a per-item reforge cache
+keyed by item `ObjectGuid`, backed by the `character_item_reforge` table. It never stores a live
+pointer; every op takes a `Player*`/`Item*` from the caller and resolves state by GUID.
+
+Reforge validation is **not re-implemented** in the adapter: `ReforgeMgr` builds the item's
+`StatBlock` + `ItemChassis` (via `ItemChassisBuilder`) and calls the pure-core `ApplyReforge`, so the
+budget-conserving / bounded-fraction / legality invariants (§5) hold identically for the NPC path, the
+command path, and the addon path.
+
+## 9. The enchant-slot stat vehicle (§8 detail, no client patch)
+
+A reforge moves `amount` points from a native item stat (`from`) into another stat (`to`). Applying
+that to a live character without patching the client uses **two** server-side apply hooks — one per
+direction — because a WotLK `SpellItemEnchantment` STAT effect can only carry a **positive** amount
+(the core reads it as `float(uint32)`, so a negative amount is impossible):
+
+- **`from` (−amount)** — `PlayerScript::OnPlayerApplyItemModsBefore`: when the item's own `from` stat
+  line is applied, subtract `amount` from `val`. `from` is always a stat the item natively has (you
+  can only reforge *out of* an existing stat), and `amount ≤` that stat's value (§5 cap), so `val`
+  stays ≥ 0.
+- **`to` (+amount)** — a small **fixed pool** of custom enchantments (one per destination
+  `ItemModType`), seeded once into `spellitemenchantment_dbc` (world DB). A reforge sets the item's
+  `PRISMATIC_ENCHANTMENT_SLOT` to `REFORGE_ENCHANT_BASE + toModType`. The per-item **amount** is not
+  baked into the shared enchant row (that would collide across items/players); it is injected at apply
+  time by `PlayerScript::OnPlayerApplyEnchantmentItemModsBefore` (whose `enchant_amount` is
+  `uint32&`), read from the `character_item_reforge` row for that item GUID.
+
+The `character_item_reforge` row (`item_guid, stat_from, stat_to, amount`) is the single source of
+truth; the enchant slot only records *which* destination stat. On login/equip the core re-applies both
+hooks, so a reforge survives restarts with no runtime DBC generation. Clearing a reforge deletes the
+row and clears the prismatic slot. The client never needs the enchant in its own DBC — stats apply
+server-side; the addon renders the human-readable reforge.
+
+## 10. Currency (pay a reforge with ANY currency)
+
+Cost is expressed as **`<item-entry> × <count>`**, where item-entry `0` means **gold** (copper) and any
+other value is an item entry used as a token (emblems, marks, a custom currency item, crafting mats…).
+The server accepts a **list** of alternatives; the player chooses which to pay with — hence "any
+currency". The list is a config string parsed by the pure `core/reforge/Currency` helpers (fully
+unit-tested, no AC types):
+
+```
+Reforge.Cost.Currencies = "0:100000, 43228:5, 40752:2"
+;  gold 10g            5× Emblem of Frost   2× Emblem of Triumph
+```
+
+`core/reforge/Currency`:
+- `struct CurrencyCost { uint32 entry; uint32 count; }`
+- `std::vector<CurrencyCost> ParseCurrencyCosts(std::string_view)` — tolerant CSV of `entry:count`;
+  drops malformed/zero-count records; deterministic order preserved.
+- `std::optional<CurrencyCost> FindCost(costs, uint32 entry)` — the chosen currency's required count,
+  or `nullopt` if that entry isn't an accepted currency.
+
+The adapter (`ReforgeMgr`) resolves the chosen currency against the parsed list, then charges: entry 0
+→ `HasEnoughMoney` / `ModifyMoney`; otherwise `HasItemCount` / `DestroyItemCount`. Charging is atomic
+with the reforge write (validate → charge → persist → apply; abort leaves nothing changed).
+
+## 11. Client addon (`client-addon/Reforge/`) + wire codec
+
+A pure renderer + command driver, mirroring mod-branding's transport. Two channels, both over the
+stock 3.3.5a `LANG_ADDON` path (no client patch, no custom opcode):
+
+- **Inbound (client → server): the built-in AzerothCore addon command channel.** The addon issues the
+  `.reforge …` chat commands (§8 `ReforgeCommandScripts`) through `AddonChannelCommandHandler`
+  (`AzerothCore\t` framing) and reads back the command's `m`/`o`/`f` replies. So the command surface
+  *is* the plugin's API and everything also works from plain chat / an NPC with no addon installed.
+- **Outbound (server → client): `RFRG` state pushes** as `LANG_ADDON` whispers (never `CHAT_MSG_ADDON`
+  — that crashes a receiving 3.3.5a client), encoded by the pure `core/reforge/Protocol` codec and
+  decoded by `Comms.lua` with the identical grammar (tab fields, `;` records, `:` sub-fields; permille
+  for fractions; ≤255-byte frames).
+
+`core/reforge/Protocol` frames (`RFRG\t<KIND>\t…`, `ProtocolVersion` bumped in lock-step with the Lua
+`ns.PROTOCOL`):
+
+```
+RFRG\tHELLO\t<version>\t<enabled>
+RFRG\tCUR\t<entry:count;…>                 accepted currencies (§10)
+RFRG\tCFG\t<maxFractionPermille>           the §5 reforge cap, for the UI slider
+RFRG\tITEM\t<slot:from:to:amount;…>        the character's current reforges (equipped items)
+```
+
+The addon UI (`Panel.lua`) lets the player pick an equipped item, a `from` stat, a legal `to` stat, an
+`amount` (bounded by the `CFG` fraction), and a **currency** from the `CUR` list with its shown count,
+then submits `.reforge do <slot> <from> <to> <amount> <currencyEntry>`. `Comms.lua` owns the transport
++ decode + a small callback registry; `Panel.lua` subscribes and renders.

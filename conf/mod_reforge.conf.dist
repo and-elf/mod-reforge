@@ -1,0 +1,92 @@
+#
+# mod-reforge configuration
+#
+# Tunables for the reforging engine. All values are read once at startup and on `.reload config`.
+# The pure core reads none of these directly -- ServerReforgeConfig snapshots them and injects them,
+# so the reforge rules stay deterministic and unit-testable.
+#
+
+#
+#    Reforge.Enable
+#        Description: Master switch for the module (NPC, commands and addon).
+#        Default:     1 - (enabled)
+#
+
+Reforge.Enable = 1
+
+#
+#    Reforge.RequireNpc
+#        Description: Require the player to be near a Reforge NPC to reforge. The NPC gossip path is
+#                     always at the NPC; this gates the command / client-addon path too. Off = the
+#                     addon panel reforges from anywhere.
+#        Default:     1 - (must be near a Reforger)
+#
+
+Reforge.RequireNpc = 1
+
+#
+#    Reforge.NpcRange
+#        Description: How close (yards) a Reforge NPC must be when Reforge.RequireNpc = 1.
+#        Default:     10.0
+#
+
+Reforge.NpcRange = 10.0
+
+#
+#    Reforge.NpcEntry
+#        Description: creature_template entry of the Reforge NPC (seeded by the module world SQL).
+#        Default:     900100
+#
+
+Reforge.NpcEntry = 900100
+
+#
+#    Reforge.EnchantBase
+#        Description: Base ID of the reforge enchant pool (seeded into spellitemenchantment_dbc). The
+#                     per-destination enchant is EnchantBase + ItemModType. Change only if it collides
+#                     with other custom enchantment IDs (and update the world SQL to match).
+#        Default:     900200
+#
+
+Reforge.EnchantBase = 900200
+
+#
+#    Reforge.MaxFraction
+#        Description: The most of a single source stat one reforge may move (0.0 - 1.0). Cata-style
+#                     0.40 lets you tune a drop without rebuilding it.
+#        Default:     0.40
+#
+
+Reforge.MaxFraction = 0.40
+
+#
+#    Reforge.LegalStats
+#        Description: CSV of stats that may be a reforge SOURCE or DESTINATION. Primaries and
+#                     spell/attack power are excluded by default so a reforge only rebalances spare
+#                     secondaries. Names: stamina, strength, agility, intellect, spirit, attackpower,
+#                     spellpower, hit, crit, haste, expertise, armorpen, mp5, defense, dodge, parry,
+#                     block, resilience.
+#        Default:     "hit,crit,haste,expertise,armorpen,spirit,dodge,parry,block,resilience,defense,mp5"
+#
+
+Reforge.LegalStats = "hit,crit,haste,expertise,armorpen,spirit,dodge,parry,block,resilience,defense,mp5"
+
+#
+#    Reforge.Cost.Currencies
+#        Description: Accepted ways to pay a reforge, as a CSV of "entry:count" (entry 0 = gold copper,
+#                     any other = an item entry used as a token). The player picks one -- hence "any
+#                     currency". Example below: 10 gold, OR 5x Emblem of Frost (43228), OR 2x Emblem of
+#                     Triumph (47241).
+#        Default:     "0:100000"   (10 gold)
+#
+
+Reforge.Cost.Currencies = "0:100000"
+
+#
+#    Reforge.Addon.Enable
+#        Description: Push RFRG state frames to the Reforge client addon over LANG_ADDON. Off = the
+#                     addon panel shows no data (the NPC and commands still work).
+#        Default:     1 - (enabled)
+#
+
+Reforge.Addon.Enable = 1
