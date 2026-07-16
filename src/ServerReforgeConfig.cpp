@@ -1,6 +1,8 @@
 #include "ServerReforgeConfig.h"
 #include "ReforgeStatMap.h"
 #include "Configuration/Config.h"
+#include <algorithm>
+#include <cmath>
 #include <sstream>
 
 namespace Reforge
@@ -22,6 +24,18 @@ namespace Reforge
         return idx < _legal.size() && _legal[idx];
     }
 
+    double ServerReforgeConfig::WeaponDamageScale(uint32_t fromLevel, uint32_t toLevel) const
+    {
+        // Identity when disabled, when the source level is unknown, or when there is no transition.
+        if (!_weaponScaleEnabled || fromLevel == 0 || fromLevel == toLevel)
+            return 1.0;
+
+        // Geometric per-level curve: weapon DPS grows roughly multiplicatively with level (§12).
+        int32_t const delta = static_cast<int32_t>(toLevel) - static_cast<int32_t>(fromLevel);
+        double const factor = std::pow(1.0 + _weaponScalePerLevel, static_cast<double>(delta));
+        return std::clamp(factor, _weaponScaleMinFactor, _weaponScaleMaxFactor);
+    }
+
     void ServerReforgeConfig::Load()
     {
         _enabled = sConfigMgr->GetOption<bool>("Reforge.Enable", true);
@@ -35,6 +49,16 @@ namespace Reforge
         // links fine statically but leaves an undefined symbol in a dynamic module .so.
         double const fraction = sConfigMgr->GetOption<float>("Reforge.MaxFraction", 0.40f);
         _maxFraction = (fraction > 0.0 && fraction <= 1.0) ? fraction : 0.40;
+
+        // Weapon-damage scaling (issue #7). GetOption is instantiated in core only for float (not
+        // double) -- using double leaves an undefined symbol in the dynamic module .so (see MaxFraction).
+        _weaponScaleEnabled = sConfigMgr->GetOption<bool>("Reforge.WeaponScale.Enable", true);
+        float const perLevelPct = sConfigMgr->GetOption<float>("Reforge.WeaponScale.PerLevelPct", 3.0f);
+        _weaponScalePerLevel = perLevelPct / 100.0;
+        float const minFactor = sConfigMgr->GetOption<float>("Reforge.WeaponScale.MinFactor", 0.1f);
+        float const maxFactor = sConfigMgr->GetOption<float>("Reforge.WeaponScale.MaxFactor", 10.0f);
+        _weaponScaleMinFactor = (minFactor > 0.0f) ? minFactor : 0.1;
+        _weaponScaleMaxFactor = (maxFactor >= _weaponScaleMinFactor) ? maxFactor : _weaponScaleMinFactor;
 
         // Legal reforge stats (source + destination), CSV of stat names.
         _legal.fill(false);

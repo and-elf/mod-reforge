@@ -108,7 +108,7 @@ essence / heroic tier). *Future:* colored sockets + socket-set bonuses (v1 grant
 
 ---
 
-## 5. Invariants (all tested — `tests/`, 51 cases: re-itemisation, currency, protocol, decision helpers)
+## 5. Invariants (all tested — `tests/`, 62 cases: re-itemisation, currency, protocol, decision helpers, weapon scaling)
 
 **ArchetypeTemplate** — `Total() == budget` exactly (across many budgets, both defined archetypes);
 points only on weight>0 stats; more weight ⇒ ≥ points; deterministic; zero budget / empty template ⇒
@@ -137,6 +137,7 @@ mod-reforge/
 │   │   ├── Reitemize.h / .cpp        # ArchetypeTemplate, ResolveSockets, Reitemize, ApplyReforge
 │   │   ├── Currency.h / .cpp         # ParseCurrencyCosts, FindCost (§10)
 │   │   ├── Charge.h / .cpp           # ReforgeCap, AmountOptions, ReforgeAllowedHere, PlanCharge (§3)
+│   │   ├── WeaponScale.h / .cpp      # ScaleWeaponDamage, WeaponScaleFactor (§12)
 │   │   └── Protocol.h / .cpp         # the §11 wire codec (RFRG frames)
 └── tests/
     ├── standalone/CMakeLists.txt     # FetchContent gtest 1.12.1; globs src/core + tests; builds reforge_core_tests
@@ -144,6 +145,7 @@ mod-reforge/
     ├── reforge/ReitemizeTest.cpp      # ArchetypeTemplate/ResolveSockets/ApplyReforge matrix
     ├── reforge/CurrencyTest.cpp       # currency parse + resolve
     ├── reforge/ChargeTest.cpp         # cap / amount menu / RequireNpc gate / charge + insufficient funds
+    ├── reforge/WeaponScaleTest.cpp    # weapon-damage scaling: up/down/equal/zero, ratio, determinism (§12)
     └── addon/ProtocolTest.cpp         # RFRG frame encode/decode parity
 ```
 
@@ -270,3 +272,96 @@ The addon UI (`Panel.lua`) lets the player pick an equipped item, a `from` stat,
 `amount` (bounded by the `CFG` fraction), and a **currency** from the `CUR` list with its shown count,
 then submits `.reforge do <slot> <from> <to> <amount> <currencyEntry>`. `Comms.lua` owns the transport
 + decode + a small callback registry; `Panel.lua` subscribes and renders.
+
+---
+
+## 12. Weapon-damage scaling on re-itemization (issue and-elf/mod-reforge#7)
+
+A reforge re-itemizes a drop for a **new level range**. Stat *budget* scaling (issue #8) is one half; a
+**weapon** actively used at that new range must also have its **min/max damage (and thus DPS)** scaled
+for the source→target level transition, or a re-itemized low-level weapon hits far too soft (or a
+down-scaled one too hard). This scaling is a **tunable**, configured under its own `Reforge.WeaponScale.*`
+namespace (deliberately disjoint from #8's `Reforge.Scale.*`, so the two features develop and merge
+independently).
+
+### 12.1 Pure core (`src/core/reforge/WeaponScale.{h,cpp}`)
+
+Dependency-free, POD in / POD out, fully unit-tested (`tests/reforge/WeaponScaleTest.cpp`).
+
+```cpp
+struct WeaponDamage { double min = 0.0; double max = 0.0; };   // mirrors ItemTemplate::_Damage (floats)
+
+// Clamped (>= 0) multiplicative factor the injected policy returns for a fromLevel->toLevel transition.
+double       WeaponScaleFactor(uint32_t fromLevel, uint32_t toLevel, IReforgeConfig const&);
+
+// Scale a weapon's min AND max by that single factor -> the min:max RATIO is preserved exactly.
+// Deterministic (pure arithmetic, no RNG, no rounding in-core). Degenerate: non-positive factor => 0
+// damage; zero source stays 0; a well-behaved policy returns 1.0 for fromLevel == toLevel (identity).
+WeaponDamage ScaleWeaponDamage(WeaponDamage const& source, uint32_t fromLevel, uint32_t toLevel,
+                               IReforgeConfig const&);
+```
+
+The scaling **curve is injected**, not baked in: `IReforgeConfig` gains one virtual,
+
+```cpp
+// Multiplicative weapon-damage factor for a source->target level transition (>1 up, <1 down, 1 = none).
+virtual double WeaponDamageScale(uint32_t fromLevel, uint32_t toLevel) const = 0;
+```
+
+so the core only applies the factor (multiply both endpoints), guaranteeing the ratio invariant and
+determinism regardless of the policy. **In-core rounding is intentionally omitted** — rounding min and
+max independently would perturb the exact ratio; the item template stores `float` and the adapter
+narrows the doubles to the proto's precision at the point of application. "Deterministic" here means:
+identical inputs ⇒ identical output (pure arithmetic).
+
+### 12.2 Config policy (`ServerReforgeConfig`, `Reforge.WeaponScale.*`)
+
+`ServerReforgeConfig::WeaponDamageScale` implements a **geometric per-level** curve — WoW weapon DPS
+grows roughly multiplicatively with level:
+
+```
+factor = clamp( (1 + PerLevelPct/100) ^ (toLevel - fromLevel),  MinFactor,  MaxFactor )
+```
+
+returning `1.0` when disabled, when `fromLevel == 0`, or when `fromLevel == toLevel`. Keys (all read via
+`sConfigMgr->GetOption<float>` — never `<double>`, per the module's dynamic-`.so` note):
+
+| key | default | meaning |
+|---|---|---|
+| `Reforge.WeaponScale.Enable`      | `1`    | master switch for weapon-damage scaling |
+| `Reforge.WeaponScale.PerLevelPct` | `3.0`  | percent DPS change per level of the source→target delta |
+| `Reforge.WeaponScale.MinFactor`   | `0.1`  | lower clamp on the resulting factor (down-scaling floor) |
+| `Reforge.WeaponScale.MaxFactor`   | `10.0` | upper clamp on the resulting factor (up-scaling ceiling) |
+
+### 12.3 Adapter — live application with NO client patch
+
+Applying scaled weapon damage to a **live** weapon uses an existing per-item core hook —
+`PlayerScript::OnPlayerApplyWeaponDamage(player, slot, proto, float& minDamage, float& maxDamage,
+damageIndex)`, called inside `Player::_ApplyWeaponDamage` for every damage line right before
+`SetBaseWeaponDamage`. Because `minDamage`/`maxDamage` are **mutable references**, the adapter rewrites
+them server-side per item-instance; no `SpellItemEnchantment` of `ITEM_ENCHANTMENT_TYPE_DAMAGE` and no
+client DBC entry are needed. The hook fires on equip and on login, so a scaled weapon survives restarts
+with no persisted weapon state and no runtime DBC generation — the analogue of §9's stat vehicle for
+weapon damage.
+
+`ReforgeVehicleScript::OnPlayerApplyWeaponDamage` (same class as the §9 stat hooks):
+
+1. gate on `Reforge.Enable` + `Reforge.WeaponScale.Enable`;
+2. resolve the equipped item at `slot`; **only re-itemized weapons scale** — the gate is the presence
+   of a `character_item_reforge` row (`sReforgeMgr->GetReforge(item->GetGUID())`), so an untouched
+   weapon is never altered;
+3. `fromLevel = proto->RequiredLevel` (the weapon's own intended level; falls back to `proto->ItemLevel`
+   when `RequiredLevel == 0`), `toLevel = player->GetLevel()` (the "current level" target, matching
+   #8's target-level choice);
+4. `auto const scaled = ScaleWeaponDamage({minDamage, maxDamage}, fromLevel, toLevel, cfg);` then
+   `minDamage = float(scaled.min); maxDamage = float(scaled.max);`.
+
+**No new persistence** is required: the factor is a pure function of the proto's source level, the
+player's current level and config, re-derived every apply. The existing reforge row is reused purely as
+the "this item was re-itemized" flag — no schema change, no new SQL.
+
+**Reconciliation with #8 (documented seam).** #7 chooses source/target levels from the proto and the
+player independently of #8. When the two branches merge, `fromLevel`/`toLevel` should be sourced from the
+same re-itemization decision #8 produces (its target level + the item's source level) so weapon damage
+and stat budget scale off one consistent transition; the pure `WeaponScale` core and its config are
+unaffected by that reconciliation (only the two lines in step 3 change).

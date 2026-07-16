@@ -1,8 +1,10 @@
 #include "ReforgeMgr.h"
 #include "ReforgeStatMap.h"
 #include "mod_reforge_loader.h"
+#include "reforge/WeaponScale.h"
 
 #include "Item.h"
+#include "ItemTemplate.h"
 #include "Player.h"
 #include "ScriptMgr.h"
 #include <algorithm>
@@ -53,6 +55,40 @@ public:
         // per-item moved amount over the shared row's placeholder.
         if (enchant_spell_id == ToItemModType(rf->to))
             enchant_amount = rf->amount;
+    }
+
+    // Weapon-damage scaling on re-itemization (ARCHITECTURE §12, issue #7). Fires inside
+    // Player::_ApplyWeaponDamage for each damage line, with mutable min/max references -- so a
+    // re-itemized weapon's damage is rescaled server-side per item-instance, no client patch and no
+    // ITEM_ENCHANTMENT_TYPE_DAMAGE row. Only weapons carrying a reforge row scale; the factor is a pure
+    // function of the weapon's source level, the player's current level and config (no persisted state).
+    void OnPlayerApplyWeaponDamage(Player* player, uint8 slot, ItemTemplate const* proto,
+                                   float& minDamage, float& maxDamage, uint8 /*damageIndex*/) override
+    {
+        if (!player || !proto)
+            return;
+
+        ServerReforgeConfig const& cfg = sReforgeMgr->Config();
+        if (!cfg.Enabled() || !cfg.WeaponScaleEnabled())
+            return;
+
+        Item* item = player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
+        if (!item)
+            return;
+
+        // Gate: only items that have been re-itemized (carry a reforge row) scale.
+        if (!sReforgeMgr->GetReforge(item->GetGUID()))
+            return;
+
+        // Source = the weapon's own intended level (RequiredLevel, fall back to ItemLevel); target =
+        // the player's current level (matches issue #8's target-level choice; see §12.3 reconciliation).
+        uint32_t const fromLevel = proto->RequiredLevel > 0 ? proto->RequiredLevel : proto->ItemLevel;
+        uint32_t const toLevel = player->GetLevel();
+
+        WeaponDamage const scaled =
+            ScaleWeaponDamage({ minDamage, maxDamage }, fromLevel, toLevel, cfg);
+        minDamage = static_cast<float>(scaled.min);
+        maxDamage = static_cast<float>(scaled.max);
     }
 };
 

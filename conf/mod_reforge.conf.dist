@@ -90,3 +90,40 @@ Reforge.Cost.Currencies = "0:100000"
 #
 
 Reforge.Addon.Enable = 1
+
+#
+#    Reforge.WeaponScale.Enable
+#        Description: Scale a re-itemized weapon's min/max damage (and thus DPS) for the source->target
+#                     level transition (issue #7). A low-level weapon reforged for a higher level range
+#                     hits appropriately harder; a down-scaled one hits softer. Only weapons that have
+#                     been reforged are affected; untouched weapons are never altered.
+#        Default:     1 - (enabled)
+#
+
+Reforge.WeaponScale.Enable = 1
+
+#
+#    Reforge.WeaponScale.PerLevelPct
+#        Description: Percent weapon-DPS change per level of the source->target delta. The factor is
+#                     geometric: (1 + PerLevelPct/100) ^ (targetLevel - sourceLevel). Higher = steeper
+#                     scaling. Applied to min and max together, so the min:max ratio is preserved.
+#        Default:     3.0
+#
+
+Reforge.WeaponScale.PerLevelPct = 3.0
+
+#
+#    Reforge.WeaponScale.MinFactor
+#        Description: Lower clamp on the resulting damage factor (the floor for heavy down-scaling).
+#        Default:     0.1
+#
+
+Reforge.WeaponScale.MinFactor = 0.1
+
+#
+#    Reforge.WeaponScale.MaxFactor
+#        Description: Upper clamp on the resulting damage factor (the ceiling for heavy up-scaling).
+#        Default:     10.0
+#
+
+Reforge.WeaponScale.MaxFactor = 10.0

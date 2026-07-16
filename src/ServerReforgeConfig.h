@@ -32,8 +32,13 @@ namespace Reforge
         SocketColor AutoSocketColor() const override { return SocketColor::Prismatic; }
         uint8_t MaxSockets() const override { return 3; }
 
+        // Weapon-damage scaling (issue #7): geometric per-level curve, clamped. 1.0 when disabled or
+        // fromLevel == toLevel (or fromLevel == 0). Reads Reforge.WeaponScale.* snapshotted in Load().
+        double WeaponDamageScale(uint32_t fromLevel, uint32_t toLevel) const override;
+
         // --- Adapter-only accessors ---
         bool Enabled() const { return _enabled; }
+        bool WeaponScaleEnabled() const { return _weaponScaleEnabled; }
         bool AddonEnabled() const { return _addonEnabled; }
         bool RequireNpc() const { return _requireNpc; }
         float NpcRange() const { return _npcRange; }
@@ -54,6 +59,10 @@ namespace Reforge
         double _maxFraction = 0.40;
         uint32_t _npcEntry = 900100;
         uint32_t _enchantBase = 900200;   // REFORGE_ENCHANT_BASE; +ItemModType per destination stat
+        bool _weaponScaleEnabled = true;  // Reforge.WeaponScale.* (issue #7)
+        double _weaponScalePerLevel = 0.03;
+        double _weaponScaleMinFactor = 0.1;
+        double _weaponScaleMaxFactor = 10.0;
         std::array<bool, static_cast<std::size_t>(ItemStat::COUNT)> _legal{};
         std::vector<CurrencyCost> _currencies;
     };

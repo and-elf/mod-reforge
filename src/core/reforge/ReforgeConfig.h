@@ -38,6 +38,14 @@ namespace Reforge
         // Hard cap on total sockets an item may carry (WoW convention ~3). Clamps AutoSocketCount so a
         // misconfigured template can never over-socket.
         virtual uint8_t MaxSockets() const = 0;
+
+        // --- Weapon-damage scaling (issue #7) ---
+
+        // Multiplicative factor applied to a re-itemized weapon's min AND max damage for a source->target
+        // level transition (source item level -> target/current level). >1 scales up, <1 scales down,
+        // 1.0 = no change. Injected so the whole curve is config-driven and the core stays deterministic;
+        // a well-behaved policy returns exactly 1.0 when fromLevel == toLevel. See ARCHITECTURE §12.
+        virtual double WeaponDamageScale(uint32_t fromLevel, uint32_t toLevel) const = 0;
     };
 }
 
