@@ -46,6 +46,21 @@ namespace Reforge
         // 1.0 = no change. Injected so the whole curve is config-driven and the core stays deterministic;
         // a well-behaved policy returns exactly 1.0 when fromLevel == toLevel. See ARCHITECTURE §12.
         virtual double WeaponDamageScale(uint32_t fromLevel, uint32_t toLevel) const = 0;
+
+        // --- Level/rarity budget scaling (ARCHITECTURE §14) ---
+
+        // The level curve: the base stat-budget POINTS an item is scaled to for a player of `level`,
+        // before the per-quality multiplier. Host-tunable (e.g. a linear Base + PerLevel*level).
+        virtual double LevelBudgetPoints(uint32_t level) const = 0;
+
+        // Per-rarity multiplier applied to the level curve, indexed by WotLK item quality (0 = poor …
+        // 6 = artifact). Lets rarer items carry a larger budget at the same level.
+        virtual double QualityBudgetMultiplier(uint8_t quality) const = 0;
+
+        // Global master switch for DOWN-scaling. When false, a reforge never reduces an item's budget
+        // below its native value (up-scaling still applies). Trinkets / effect items are additionally
+        // excluded from down-scaling regardless of this flag (see BudgetScale::DownscalePermitted).
+        virtual bool AllowDownscale() const = 0;
     };
 }
 

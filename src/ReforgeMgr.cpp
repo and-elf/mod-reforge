@@ -1,5 +1,6 @@
 #include "ReforgeMgr.h"
 #include "ReforgeStatMap.h"
+#include "reforge/BudgetScale.h"
 #include "reforge/Charge.h"
 #include "reforge/Currency.h"
 #include "reforge/Reitemize.h"
@@ -31,6 +32,28 @@ namespace Reforge
             return Acore::StringFormat("item #{}", entry);
         }
 
+        // Twink-protection inputs for §14 down-scaling: an item is excluded from DOWN-scaling if it is
+        // a trinket or carries an on-use / on-equip spell effect (up-scaling stays allowed).
+        bool IsTrinket(ItemTemplate const* proto)
+        {
+            return proto && proto->InventoryType == INVTYPE_TRINKET;
+        }
+
+        bool HasUseOrEquipEffect(ItemTemplate const* proto)
+        {
+            if (!proto)
+                return false;
+            for (auto const& spell : proto->Spells)
+            {
+                if (spell.SpellId == 0)
+                    continue;
+                if (spell.SpellTrigger == ITEM_SPELLTRIGGER_ON_USE
+                    || spell.SpellTrigger == ITEM_SPELLTRIGGER_ON_EQUIP)
+                    return true;
+            }
+            return false;
+        }
+
         // When Reforge.RequireNpc is on, a reforge must be done near a Reforge NPC (the gossip path is
         // there by definition; the addon/command path is gated here). Off => reforge from anywhere.
         bool NearReforger(Player* player, ServerReforgeConfig const& cfg)
@@ -59,7 +82,7 @@ namespace Reforge
         _cache.clear();
 
         QueryResult result = CharacterDatabase.Query(
-            "SELECT `item_guid`, `stat_from`, `stat_to`, `amount` FROM `character_item_reforge`");
+            "SELECT `item_guid`, `stat_from`, `stat_to`, `amount`, `scale` FROM `character_item_reforge`");
         if (!result)
         {
             LOG_INFO("server.loading", ">> Loaded 0 item reforges.");
@@ -74,11 +97,13 @@ namespace Reforge
             uint8_t const from = fields[1].Get<uint8>();
             uint8_t const to = fields[2].Get<uint8>();
             uint32_t const amount = fields[3].Get<uint32>();
+            uint32_t const scale = fields[4].Get<uint32>();
 
             if (from >= static_cast<uint8_t>(ItemStat::COUNT) || to >= static_cast<uint8_t>(ItemStat::COUNT) || amount == 0)
                 continue;
 
-            _cache[guid] = { static_cast<ItemStat>(from), static_cast<ItemStat>(to), amount };
+            _cache[guid] = { static_cast<ItemStat>(from), static_cast<ItemStat>(to), amount,
+                             scale == 0 ? 1000u : scale };
             ++loaded;
         } while (result->NextRow());
 
@@ -118,6 +143,15 @@ namespace Reforge
             return false;
         }
 
+        // Re-reforge flag (#6): when re-reforging is off, an already-reforged item must be cleared
+        // before it can be reforged again.
+        uint32_t const key = item->GetGUID().GetCounter();
+        if (!_config.ReReforgeAllowed() && _cache.count(key))
+        {
+            outMsg = "This item is already reforged. Clear its reforge first.";
+            return false;
+        }
+
         ItemTemplate const* proto = item->GetTemplate();
         if (_config.IsItemBlocked(proto))
         {
@@ -125,8 +159,25 @@ namespace Reforge
             return false;
         }
 
-        StatBlock const block = BuildStatBlock(proto);
+        StatBlock const native = BuildStatBlock(proto);
         ItemChassis const chassis = BuildChassis(proto);
+
+        // Level/rarity budget scaling (§14): normalise the item's budget to the player's CURRENT level
+        // and the item's quality, then run the stat-move reforge on the SCALED block. The scale factor
+        // (permille) is persisted and re-applied by the stat vehicle at equip time.
+        uint32_t const sourceBudget = native.Total();
+        uint32_t scalePermille = 1000;
+        StatBlock block = native;
+        if (_config.ScaleEnabled() && proto && sourceBudget > 0)
+        {
+            uint32_t const rawTarget = TargetBudget(player->GetLevel(), static_cast<uint8_t>(proto->Quality), _config);
+            bool const isDownscale = rawTarget < sourceBudget;
+            bool const permitted = DownscalePermitted(isDownscale, IsTrinket(proto), HasUseOrEquipEffect(proto),
+                                                       _config.AllowDownscale());
+            uint32_t const effTarget = permitted ? rawTarget : sourceBudget;
+            scalePermille = ScaleFactorPermille(sourceBudget, effTarget);
+            block = ScaleStatBlock(native, effTarget);
+        }
 
         // Nice, specific messages first; the pure core is the final authority (§5).
         if (!_config.IsLegalStat(from))
@@ -193,19 +244,19 @@ namespace Reforge
             player->DestroyItemCount(currencyEntry, plan.amount, true);
 
         // Apply the stat vehicle: remove old mods, update cache + prismatic marker, re-apply.
-        uint32_t const key = item->GetGUID().GetCounter();
         bool const equipped = item->IsEquipped();
         if (equipped)
             player->_ApplyItemMods(item, item->GetSlot(), false);
 
-        _cache[key] = { from, to, amount };
+        _cache[key] = { from, to, amount, scalePermille };
         item->SetEnchantment(PRISMATIC_ENCHANTMENT_SLOT, _config.EnchantBase() + ToItemModType(to), 0, 0);
 
         Reapply(player, item, equipped);
 
         CharacterDatabase.Execute(
-            "REPLACE INTO `character_item_reforge` (`item_guid`, `stat_from`, `stat_to`, `amount`) VALUES ({}, {}, {}, {})",
-            key, static_cast<uint32>(from), static_cast<uint32>(to), amount);
+            "REPLACE INTO `character_item_reforge` (`item_guid`, `stat_from`, `stat_to`, `amount`, `scale`) "
+            "VALUES ({}, {}, {}, {}, {})",
+            key, static_cast<uint32>(from), static_cast<uint32>(to), amount, scalePermille);
         item->SetState(ITEM_CHANGED, player);
 
         outMsg = Acore::StringFormat("Reforged {} {} into {}.", amount, StatName(from), StatName(to));

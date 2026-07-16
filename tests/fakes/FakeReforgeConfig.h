@@ -2,7 +2,9 @@
 #define MOD_REFORGE_TESTS_FAKES_FAKEREFORGECONFIG_H
 
 #include "reforge/ReforgeConfig.h"
+#include <array>
 #include <cmath>
+#include <cstdint>
 #include <optional>
 
 namespace Reforge::Test
@@ -96,6 +98,26 @@ namespace Reforge::Test
             int const delta = static_cast<int>(toLevel) - static_cast<int>(fromLevel);
             return std::pow(1.0 + weaponScalePerLevel, delta);
         }
+
+        // --- Level/rarity budget scaling (§13) ---
+        // A simple, predictable linear level curve and a per-quality multiplier table (all 1.0 by
+        // default so a test can isolate one quality), plus the global down-scale switch.
+        double levelBudgetBase = 0.0;
+        double levelBudgetPerLevel = 10.0;
+        std::array<double, 7> qualityMult{ 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0 };
+        bool allowDownscale = true;
+
+        double LevelBudgetPoints(uint32_t level) const override
+        {
+            return levelBudgetBase + levelBudgetPerLevel * static_cast<double>(level);
+        }
+
+        double QualityBudgetMultiplier(uint8_t quality) const override
+        {
+            return quality < qualityMult.size() ? qualityMult[quality] : 1.0;
+        }
+
+        bool AllowDownscale() const override { return allowDownscale; }
     };
 }
 

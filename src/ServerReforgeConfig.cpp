@@ -6,7 +6,9 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <exception>
 #include <sstream>
+#include <string>
 
 namespace Reforge
 {
@@ -133,11 +135,41 @@ namespace Reforge
         std::string const armorRaw = sConfigMgr->GetOption<std::string>("Reforge.Blocklist.ArmorClasses", "");
         _blockPolicy.armorClasses = ParseArmorClassList(armorRaw);
 
-        std::string const qualityRaw = sConfigMgr->GetOption<std::string>("Reforge.Blocklist.Qualities", "");
-        std::stringstream qss(qualityRaw);
-        std::string qtoken;
-        while (std::getline(qss, qtoken, ','))
-            if (std::optional<uint8_t> const quality = QualityFromName(qtoken))
+        std::string const blockQualityRaw = sConfigMgr->GetOption<std::string>("Reforge.Blocklist.Qualities", "");
+        std::stringstream blockQss(blockQualityRaw);
+        std::string blockQtoken;
+        while (std::getline(blockQss, blockQtoken, ','))
+            if (std::optional<uint8_t> const quality = QualityFromName(blockQtoken))
                 _blockPolicy.qualities.push_back(*quality);
+
+        // Level/rarity budget scaling (§14) + re-reforge flag (#6). GetOption is instantiated in core
+        // only for float (not double); read the curve params as float and widen (see MaxFraction note).
+        _scaleEnabled = sConfigMgr->GetOption<bool>("Reforge.Scale.Enable", true);
+        _allowDownscale = sConfigMgr->GetOption<bool>("Reforge.Scale.AllowDownscale", true);
+        _reReforgeAllowed = sConfigMgr->GetOption<bool>("Reforge.ReReforge.Allowed", true);
+        _scaleLevelBase = sConfigMgr->GetOption<float>("Reforge.Scale.LevelBudget.Base", 0.0f);
+        _scaleLevelPerLevel = sConfigMgr->GetOption<float>("Reforge.Scale.LevelBudget.PerLevel", 5.0f);
+
+        // Per-quality multipliers: CSV of up to 7 floats (quality 0 = poor … 6 = artifact). A short or
+        // malformed list leaves the built-in defaults for the missing entries.
+        std::string const scaleQualityRaw = sConfigMgr->GetOption<std::string>(
+            "Reforge.Scale.Quality.Multipliers", "0.5,0.6,0.75,0.9,1.0,1.1,1.0");
+        std::stringstream scaleQs(scaleQualityRaw);
+        std::string scaleQtoken;
+        std::size_t qidx = 0;
+        while (qidx < _qualityMult.size() && std::getline(scaleQs, scaleQtoken, ','))
+        {
+            try
+            {
+                double const value = std::stod(scaleQtoken);
+                if (value >= 0.0)
+                    _qualityMult[qidx] = value;
+            }
+            catch (std::exception const&)
+            {
+                // leave the default for this index
+            }
+            ++qidx;
+        }
     }
 }
