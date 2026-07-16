@@ -2,6 +2,8 @@
 #define MOD_REFORGE_TESTS_FAKES_FAKEREFORGECONFIG_H
 
 #include "reforge/ReforgeConfig.h"
+#include <cmath>
+#include <optional>
 
 namespace Reforge::Test
 {
@@ -76,6 +78,24 @@ namespace Reforge::Test
 
         SocketColor AutoSocketColor() const override { return SocketColor::Prismatic; }
         uint8_t MaxSockets() const override { return maxSockets; }
+
+        // Weapon-damage scaling policy (issue #7). Either a forced constant factor (`forcedWeaponScale`,
+        // used to drive the core's degenerate branches -- zero/negative factor), or a geometric per-level
+        // curve that returns exactly 1.0 for equal levels or when disabled. Tunable so a test can prove
+        // the factor genuinely drives the output.
+        bool weaponScaleEnabled = true;
+        double weaponScalePerLevel = 0.03;          // 3% per level of the from->to delta
+        std::optional<double> forcedWeaponScale;    // when set, overrides the curve verbatim
+
+        double WeaponDamageScale(uint32_t fromLevel, uint32_t toLevel) const override
+        {
+            if (forcedWeaponScale)
+                return *forcedWeaponScale;
+            if (!weaponScaleEnabled || fromLevel == toLevel)
+                return 1.0;
+            int const delta = static_cast<int>(toLevel) - static_cast<int>(fromLevel);
+            return std::pow(1.0 + weaponScalePerLevel, delta);
+        }
     };
 }
 
