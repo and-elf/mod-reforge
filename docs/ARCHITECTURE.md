@@ -83,6 +83,18 @@ std::optional<StatBlock> ApplyReforge(StatBlock const& base, ReforgeOp const&, I
 `IReforgeConfig` (injected): `ReforgeMaxFraction()`, `StatWeight(archetype,stat)`,
 `StatLegal(archetype,stat)`, `AutoSocketCount(slot,archetype)`, `AutoSocketColor()`, `MaxSockets()`.
 
+### Pure decision helpers (`core/reforge/Charge.*`)
+
+The decidable arithmetic every adapter path shares — kept pure (POD in/out) so it is unit-tested
+without a world, and so the NPC, command and addon paths can never diverge:
+
+- `ReforgeCap(source, maxFraction)` — the §5 bounded-fraction cap, `floor(source * maxFraction)`.
+  `ApplyReforge` and every adapter pre-check derive their cap here (single source of truth).
+- `AmountOptions(cap)` — the reforge NPC's 25/50/75/100%-of-cap menu (zero/duplicate buckets dropped).
+- `ReforgeAllowedHere(requireNpc, nearReforger)` — the `Reforge.RequireNpc` gate decision.
+- `PlanCharge(accepted, chosenEntry, playerHas)` — resolve the chosen currency and decide affordability
+  (`Ok` / `NotAccepted` / `Insufficient`); the adapter only reads `playerHas` and performs the deduction.
+
 ---
 
 ## 4. Gem sockets (automatic)
@@ -96,7 +108,7 @@ essence / heroic tier). *Future:* colored sockets + socket-set bonuses (v1 grant
 
 ---
 
-## 5. Invariants (all tested — `tests/reforge/`, 20 cases)
+## 5. Invariants (all tested — `tests/`, 51 cases: re-itemisation, currency, protocol, decision helpers)
 
 **ArchetypeTemplate** — `Total() == budget` exactly (across many budgets, both defined archetypes);
 points only on weight>0 stats; more weight ⇒ ≥ points; deterministic; zero budget / empty template ⇒
@@ -123,11 +135,16 @@ mod-reforge/
 │   │   ├── Stats.h                   # ItemStat/Archetype/ArmorClass/EquipSlot/SocketColor; StatBlock, SocketLayout
 │   │   ├── ReforgeConfig.h           # IReforgeConfig (injected itemisation data + tunables)
 │   │   ├── Reitemize.h / .cpp        # ArchetypeTemplate, ResolveSockets, Reitemize, ApplyReforge
-│   │   └── (adapter .cpp/.h at src/ root — future: item vehicle, reforge UI, persistence)
+│   │   ├── Currency.h / .cpp         # ParseCurrencyCosts, FindCost (§10)
+│   │   ├── Charge.h / .cpp           # ReforgeCap, AmountOptions, ReforgeAllowedHere, PlanCharge (§3)
+│   │   └── Protocol.h / .cpp         # the §11 wire codec (RFRG frames)
 └── tests/
     ├── standalone/CMakeLists.txt     # FetchContent gtest 1.12.1; globs src/core + tests; builds reforge_core_tests
     ├── fakes/FakeReforgeConfig.h      # deterministic DI test double
-    └── reforge/ReitemizeTest.cpp      # the 20-case matrix
+    ├── reforge/ReitemizeTest.cpp      # ArchetypeTemplate/ResolveSockets/ApplyReforge matrix
+    ├── reforge/CurrencyTest.cpp       # currency parse + resolve
+    ├── reforge/ChargeTest.cpp         # cap / amount menu / RequireNpc gate / charge + insufficient funds
+    └── addon/ProtocolTest.cpp         # RFRG frame encode/decode parity
 ```
 
 Fast loop: `cmake -S tests/standalone -B build && cmake --build build && ctest --test-dir build`.
@@ -219,9 +236,11 @@ Reforge.Cost.Currencies = "0:100000, 43228:5, 40752:2"
 - `std::optional<CurrencyCost> FindCost(costs, uint32 entry)` — the chosen currency's required count,
   or `nullopt` if that entry isn't an accepted currency.
 
-The adapter (`ReforgeMgr`) resolves the chosen currency against the parsed list, then charges: entry 0
-→ `HasEnoughMoney` / `ModifyMoney`; otherwise `HasItemCount` / `DestroyItemCount`. Charging is atomic
-with the reforge write (validate → charge → persist → apply; abort leaves nothing changed).
+The adapter (`ReforgeMgr`) reads the player's balance (`GetMoney` for gold, `GetItemCount` for a token)
+and hands it to the pure `PlanCharge` (`core/reforge/Charge`), which resolves the chosen currency and
+decides `Ok` / `NotAccepted` / `Insufficient`; on `Ok` the adapter deducts via `ModifyMoney` (gold) or
+`DestroyItemCount` (token). Charging is atomic with the reforge write (validate → charge → persist →
+apply; abort leaves nothing changed).
 
 ## 11. Client addon (`client-addon/Reforge/`) + wire codec
 

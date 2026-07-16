@@ -2,6 +2,7 @@
 #include "ReforgeMgr.h"
 #include "ReforgeStatMap.h"
 #include "mod_reforge_loader.h"
+#include "reforge/Charge.h"
 
 #include "Chat.h"
 #include "Creature.h"
@@ -14,7 +15,6 @@
 #include "ScriptMgr.h"
 #include "StringFormat.h"
 
-#include <cmath>
 #include <unordered_map>
 
 using namespace Reforge;
@@ -57,19 +57,6 @@ namespace
         if (ItemTemplate const* proto = sObjectMgr->GetItemTemplate(c.entry))
             name = proto->Name1;
         return Acore::StringFormat("Pay {}x {}", c.count, name);
-    }
-
-    // The four amount options for a source with the given cap: 25/50/75/100% of cap (deduped, > 0).
-    std::vector<uint32> AmountOptions(uint32 cap)
-    {
-        std::vector<uint32> out;
-        for (double f : { 0.25, 0.50, 0.75, 1.00 })
-        {
-            uint32 const v = static_cast<uint32>(std::floor(cap * f));
-            if (v > 0 && (out.empty() || out.back() != v))
-                out.push_back(v);
-        }
-        return out;
     }
 
     void SendMain(Player* player, Creature* creature)
@@ -163,7 +150,7 @@ namespace
 
         Item* item = player->GetItemByPos(INVENTORY_SLOT_BAG_0, sel.slot);
         StatBlock const block = item ? BuildStatBlock(item->GetTemplate()) : StatBlock{};
-        uint32 const cap = static_cast<uint32>(block.Get(sel.from) * sReforgeMgr->Config().ReforgeMaxFraction());
+        uint32 const cap = ReforgeCap(block.Get(sel.from), sReforgeMgr->Config().ReforgeMaxFraction());
 
         std::vector<uint32> const options = AmountOptions(cap);
         for (std::size_t i = 0; i < options.size(); ++i)
@@ -225,7 +212,7 @@ public:
         {
             Item* item = player->GetItemByPos(INVENTORY_SLOT_BAG_0, sel.slot);
             StatBlock const block = item ? BuildStatBlock(item->GetTemplate()) : StatBlock{};
-            uint32 const cap = static_cast<uint32>(block.Get(sel.from) * sReforgeMgr->Config().ReforgeMaxFraction());
+            uint32 const cap = ReforgeCap(block.Get(sel.from), sReforgeMgr->Config().ReforgeMaxFraction());
             std::vector<uint32> const options = AmountOptions(cap);
             std::size_t const idx = action - ACTION_AMOUNT_BASE;
             if (idx < options.size())
