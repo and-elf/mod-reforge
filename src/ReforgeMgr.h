@@ -29,6 +29,7 @@ namespace Reforge
             ItemStat from = ItemStat::Spirit;
             ItemStat to = ItemStat::HitRating;
             uint32_t amount = 0;
+            uint32_t scale = 1000;   // level/rarity budget scale factor in permille (1000 = identity, §14)
         };
 
         static ReforgeMgr* instance();

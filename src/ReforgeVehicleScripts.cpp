@@ -37,7 +37,18 @@ public:
             return;
 
         std::optional<ItemStat> const mapped = FromItemModType(statType);
-        if (mapped && *mapped == rf->from)
+        if (!mapped)
+            return;   // unmapped lines did not contribute to the budget: neither scaled nor reforged
+
+        // Budget scaling (ARCHITECTURE §14): multiply every native, budget-contributing stat line by
+        // the item's stored permille factor (1000 = identity). Only positive lines are part of the
+        // budget; per-stat integer flooring is a close, safe approximation of the exact ScaleStatBlock.
+        if (rf->scale != 1000 && val > 0)
+            val = static_cast<int32>(static_cast<int64>(val) * static_cast<int64>(rf->scale) / 1000);
+
+        // Stat-move reforge (§5): subtract the moved amount from the (now scaled) `from` stat line.
+        // amount <= cap <= the scaled `from` value, so val stays >= 0 (clamped for the fraction==1 edge).
+        if (*mapped == rf->from)
             val = std::max<int32>(0, val - static_cast<int32>(rf->amount));
     }
 

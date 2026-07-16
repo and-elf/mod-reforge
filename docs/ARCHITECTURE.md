@@ -108,7 +108,7 @@ essence / heroic tier). *Future:* colored sockets + socket-set bonuses (v1 grant
 
 ---
 
-## 5. Invariants (all tested — `tests/`: re-itemisation, currency, protocol, decision helpers, weapon scaling, blocklist)
+## 5. Invariants (all tested — `tests/`: re-itemisation, currency, protocol, decision helpers, weapon scaling, blocklist, budget scaling)
 
 **ArchetypeTemplate** — `Total() == budget` exactly (across many budgets, both defined archetypes);
 points only on weight>0 stats; more weight ⇒ ≥ points; deterministic; zero budget / empty template ⇒
@@ -139,6 +139,7 @@ mod-reforge/
 │   │   ├── Charge.h / .cpp           # ReforgeCap, AmountOptions, ReforgeAllowedHere, PlanCharge (§3)
 │   │   ├── WeaponScale.h / .cpp      # ScaleWeaponDamage, WeaponScaleFactor (§12)
 │   │   ├── Blocklist.h / .cpp        # IsBlocked + id/slot/armorclass parsers (§13)
+│   │   ├── BudgetScale.h / .cpp      # TargetBudget, ScaleFactorPermille, ScaleStatBlock (§14)
 │   │   └── Protocol.h / .cpp         # the §11 wire codec (RFRG frames)
 └── tests/
     ├── standalone/CMakeLists.txt     # FetchContent gtest 1.12.1; globs src/core + tests; builds reforge_core_tests
@@ -148,6 +149,7 @@ mod-reforge/
     ├── reforge/ChargeTest.cpp         # cap / amount menu / RequireNpc gate / charge + insufficient funds
     ├── reforge/WeaponScaleTest.cpp    # weapon-damage scaling: up/down/equal/zero, ratio, determinism (§12)
     ├── reforge/BlocklistTest.cpp      # IsBlocked (all axes + OR) + id/slot/armorclass parsers (§13)
+    ├── reforge/BudgetScaleTest.cpp    # target budget / quality mult / downscale guard / exact-total (§14)
     └── addon/ProtocolTest.cpp         # RFRG frame encode/decode parity
 ```
 
@@ -420,3 +422,81 @@ slot axis, so a separate inventory-type list would only duplicate it.
   items from the reforge NPC menu, so a blocked item never even appears as reforgeable.
 
 Sensible defaults are empty on every axis, so nothing is blocked out of the box.
+---
+
+## 14. Level/rarity budget scaling (issues #8, #6)
+
+A reforge also **re-itemises the item's stat BUDGET to the reforging player's CURRENT level** so an
+early drop stays useful as the character grows. This is layered ON TOP of the §5 stat-move reforge: a
+reforge first scales the whole budget, then moves a bounded fraction of one (scaled) stat into another.
+
+### 14.1 Target budget — pure core (`core/reforge/BudgetScale.{h,cpp}`)
+
+The target budget is a deterministic function of the player's level and the item's quality only —
+**independent of the item's native budget** (that is the point: every item normalises to *your* level):
+
+```
+TargetBudget(level, quality, cfg) = round( cfg.LevelBudgetPoints(level) * cfg.QualityBudgetMultiplier(quality) )
+```
+
+Both the level curve and the per-quality multiplier are injected via `IReforgeConfig` (three new
+virtuals), so the core stays generic and unit-tested:
+
+```cpp
+double LevelBudgetPoints(uint32_t level)   const;   // the level curve (host-tunable)
+double QualityBudgetMultiplier(uint8_t q)  const;   // per WotLK quality 0..6 (poor..artifact)
+bool   AllowDownscale()                    const;   // global twink-safety master switch
+```
+
+Scaling primitives (all POD-in / POD-out, deterministic, edge-cases handled):
+
+- `uint32_t TargetBudget(level, quality, cfg)` — the formula above; clamps to ≥ 0.
+- `uint32_t ScaleFactorPermille(sourceBudget, targetBudget)` — the per-stat multiplier the live stat
+  vehicle applies, expressed in **permille** (1000 = identity). `sourceBudget == 0 ⇒ 1000`.
+- `StatBlock ScaleStatBlock(base, targetBudget)` — scales `base` proportionally so `Total()` lands
+  **exactly** on `targetBudget` (the same largest-remainder apportionment as `ArchetypeTemplate`);
+  `base.Total() == 0` or `targetBudget == 0 ⇒ zeroed`. Used for the player-facing reforge math (cap,
+  legality, displayed amounts).
+
+### 14.2 Down-scale guard (twink protection)
+
+Up-scaling is always allowed. **Down-scaling is blocked for trinkets and for items carrying an on-use /
+on-equip effect** (no level-19 +500 AP raid trinket), and can be disabled globally. The decision is a
+pure predicate:
+
+```cpp
+bool     DownscalePermitted(bool isDownscale, bool isTrinket, bool hasEffect, bool allowDownscale);
+uint32_t ClampScalePermille(uint32_t rawPermille, bool isTrinket, bool hasEffect, bool allowDownscale);
+```
+
+`DownscalePermitted` is `true` for any up-scale (`!isDownscale`); for a down-scale it is
+`allowDownscale && !isTrinket && !hasEffect`. When a down-scale is not permitted the effective target is
+clamped back to the native budget (identity, permille 1000) — the item simply keeps its native stats.
+
+### 14.3 Adapter (`ReforgeMgr` + the stat vehicle)
+
+`ReforgeMgr::ApplyReforge` computes the scale as part of every reforge: build the native `StatBlock`,
+read `player->GetLevel()`, the `ItemTemplate` quality, `InventoryType == INVTYPE_TRINKET`, and whether
+any `Spells[]` entry has `ITEM_SPELLTRIGGER_ON_USE`/`ON_EQUIP`; derive the effective target (guarded),
+persist the resulting **scale permille**, and run the §5 reforge on the *scaled* block. The
+`character_item_reforge` row gains a `scale` column (permille, default 1000).
+
+The **stat vehicle** (`OnPlayerApplyItemModsBefore`) multiplies every native (budget-contributing) stat
+line by the stored permille before the existing `from` subtraction — so the whole item scales, and the
+single-stat reforge composes on top of the scaled budget. Per-stat integer flooring means the live
+apply is a close approximation of `ScaleStatBlock`'s exact total (an accepted, safe rounding tradeoff;
+the `from` line is still clamped ≥ 0).
+
+### 14.4 Re-reforge flag (#6)
+
+`Reforge.ReReforge.Allowed` (**on by default**) lets a player re-reforge/re-scale an already-reforged
+item — e.g. re-run it each level to bump the budget. When **off**, an item that already carries a
+reforge is rejected until it is cleared first. Enforced in the adapter (`ReforgeMgr`), before charging.
+
+### 14.5 Config (`Reforge.Scale.*` + `Reforge.ReReforge.Allowed`)
+
+`Reforge.Scale.Enable` (master, default on), `Reforge.Scale.LevelBudget.Base` /
+`Reforge.Scale.LevelBudget.PerLevel` (the linear level curve `Base + PerLevel*level`),
+`Reforge.Scale.Quality.Multipliers` (CSV of 7 floats, quality 0..6), `Reforge.Scale.AllowDownscale`
+(default on) and `Reforge.ReReforge.Allowed` (default on). The curve should be tuned to the realm's
+itemisation.

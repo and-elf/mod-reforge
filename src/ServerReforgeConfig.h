@@ -39,6 +39,18 @@ namespace Reforge
         // fromLevel == toLevel (or fromLevel == 0). Reads Reforge.WeaponScale.* snapshotted in Load().
         double WeaponDamageScale(uint32_t fromLevel, uint32_t toLevel) const override;
 
+        // Level/rarity budget scaling (§14): a linear level curve (Base + PerLevel*level) and a
+        // per-quality multiplier table, both snapshotted from Reforge.Scale.*.
+        double LevelBudgetPoints(uint32_t level) const override
+        {
+            return _scaleLevelBase + _scaleLevelPerLevel * static_cast<double>(level);
+        }
+        double QualityBudgetMultiplier(uint8_t quality) const override
+        {
+            return quality < _qualityMult.size() ? _qualityMult[quality] : 1.0;
+        }
+        bool AllowDownscale() const override { return _allowDownscale; }
+
         // --- Adapter-only accessors ---
         bool Enabled() const { return _enabled; }
         bool WeaponScaleEnabled() const { return _weaponScaleEnabled; }
@@ -48,10 +60,15 @@ namespace Reforge
         uint32_t NpcEntry() const { return _npcEntry; }
         uint32_t EnchantBase() const { return _enchantBase; }
 
+        // Whether level/rarity budget scaling is applied as part of a reforge (§14).
+        bool ScaleEnabled() const { return _scaleEnabled; }
+        // Whether an already-reforged item may be reforged again without clearing first (issue #6).
+        bool ReReforgeAllowed() const { return _reReforgeAllowed; }
+
         // Whether `stat` may be a reforge source/destination (the fixed, config-tunable eligible set).
         bool IsLegalStat(ItemStat stat) const;
 
-        // Whether `proto` is on the reforge blocklist (§12): blocked by entry id, equip slot, armour
+        // Whether `proto` is on the reforge blocklist (§13): blocked by entry id, equip slot, armour
         // class, or quality (OR). Builds a BlockKey and delegates to the pure-core IsBlocked. A null
         // proto is never blocked. Used by ReforgeMgr::ApplyReforge and the NPC gossip menu.
         bool IsItemBlocked(ItemTemplate const* proto) const;
@@ -74,6 +91,14 @@ namespace Reforge
         std::array<bool, static_cast<std::size_t>(ItemStat::COUNT)> _legal{};
         std::vector<CurrencyCost> _currencies;
         BlockPolicy _blockPolicy;
+
+        // Level/rarity budget scaling (§14) + re-reforge flag (#6).
+        bool _scaleEnabled = true;
+        bool _allowDownscale = true;
+        bool _reReforgeAllowed = true;
+        double _scaleLevelBase = 0.0;
+        double _scaleLevelPerLevel = 5.0;
+        std::array<double, 7> _qualityMult{ 0.5, 0.6, 0.75, 0.9, 1.0, 1.1, 1.0 };
     };
 }
 

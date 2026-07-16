@@ -176,3 +176,65 @@ Reforge.Blocklist.Qualities = ""
 #
 
 Reforge.Blocklist.ArmorClasses = ""
+
+###############################################################################
+# LEVEL / RARITY BUDGET SCALING (issue #8) + RE-REFORGE (issue #6)
+#
+# On top of moving one stat into another, a reforge re-itemises the item's whole
+# stat BUDGET to the reforging player's CURRENT level (and the item's quality),
+# so an early drop stays useful as you level. The target budget depends ONLY on
+# level + quality -- NOT on the item's native budget -- so every item normalises
+# to your level. Tune the curve below to your realm's itemisation.
+###############################################################################
+
+#
+#    Reforge.Scale.Enable
+#        Description: Master switch for level/rarity budget scaling. Off = a reforge only moves stats
+#                     (the item keeps its native budget); the other Reforge.Scale.* keys are ignored.
+#        Default:     1 - (enabled)
+#
+
+Reforge.Scale.Enable = 1
+
+#
+#    Reforge.Scale.LevelBudget.Base
+#    Reforge.Scale.LevelBudget.PerLevel
+#        Description: The level curve. The target stat budget (in points) for a player of level L, before
+#                     the per-quality multiplier, is:  Base + PerLevel * L. With the defaults a level-80
+#                     item is scaled to 400 points * its quality multiplier. Raise PerLevel for a steeper
+#                     curve. These are the total stat points spread across the item's existing stats.
+#        Default:     Base = 0.0, PerLevel = 5.0
+#
+
+Reforge.Scale.LevelBudget.Base = 0.0
+Reforge.Scale.LevelBudget.PerLevel = 5.0
+
+#
+#    Reforge.Scale.Quality.Multipliers
+#        Description: Per-rarity multiplier on the level curve, as a CSV of up to 7 floats indexed by
+#                     item quality: poor, common, uncommon, rare, epic, legendary, artifact. A shorter
+#                     list leaves the defaults for the missing entries.
+#        Default:     "0.5,0.6,0.75,0.9,1.0,1.1,1.0"
+#
+
+Reforge.Scale.Quality.Multipliers = "0.5,0.6,0.75,0.9,1.0,1.1,1.0"
+
+#
+#    Reforge.Scale.AllowDownscale
+#        Description: Whether a reforge may REDUCE an item's budget below its native value (up-scaling is
+#                     always allowed). Regardless of this flag, trinkets and items carrying an on-use /
+#                     on-equip effect are NEVER down-scaled (twink protection -- no level-19 raid trinket).
+#        Default:     1 - (down-scaling allowed for ordinary gear)
+#
+
+Reforge.Scale.AllowDownscale = 1
+
+#
+#    Reforge.ReReforge.Allowed
+#        Description: Whether an already-reforged item may be reforged again (e.g. re-run each level to
+#                     bump its scaled budget). Off = an item must have its reforge cleared before it can
+#                     be reforged again.
+#        Default:     1 - (re-reforging allowed)
+#
+
+Reforge.ReReforge.Allowed = 1
