@@ -108,7 +108,7 @@ essence / heroic tier). *Future:* colored sockets + socket-set bonuses (v1 grant
 
 ---
 
-## 5. Invariants (all tested — `tests/`, 62 cases: re-itemisation, currency, protocol, decision helpers, weapon scaling)
+## 5. Invariants (all tested — `tests/`: re-itemisation, currency, protocol, decision helpers, weapon scaling, blocklist)
 
 **ArchetypeTemplate** — `Total() == budget` exactly (across many budgets, both defined archetypes);
 points only on weight>0 stats; more weight ⇒ ≥ points; deterministic; zero budget / empty template ⇒
@@ -138,6 +138,7 @@ mod-reforge/
 │   │   ├── Currency.h / .cpp         # ParseCurrencyCosts, FindCost (§10)
 │   │   ├── Charge.h / .cpp           # ReforgeCap, AmountOptions, ReforgeAllowedHere, PlanCharge (§3)
 │   │   ├── WeaponScale.h / .cpp      # ScaleWeaponDamage, WeaponScaleFactor (§12)
+│   │   ├── Blocklist.h / .cpp        # IsBlocked + id/slot/armorclass parsers (§13)
 │   │   └── Protocol.h / .cpp         # the §11 wire codec (RFRG frames)
 └── tests/
     ├── standalone/CMakeLists.txt     # FetchContent gtest 1.12.1; globs src/core + tests; builds reforge_core_tests
@@ -146,6 +147,7 @@ mod-reforge/
     ├── reforge/CurrencyTest.cpp       # currency parse + resolve
     ├── reforge/ChargeTest.cpp         # cap / amount menu / RequireNpc gate / charge + insufficient funds
     ├── reforge/WeaponScaleTest.cpp    # weapon-damage scaling: up/down/equal/zero, ratio, determinism (§12)
+    ├── reforge/BlocklistTest.cpp      # IsBlocked (all axes + OR) + id/slot/armorclass parsers (§13)
     └── addon/ProtocolTest.cpp         # RFRG frame encode/decode parity
 ```
 
@@ -365,3 +367,56 @@ player independently of #8. When the two branches merge, `fromLevel`/`toLevel` s
 same re-itemization decision #8 produces (its target level + the item's source level) so weapon damage
 and stat budget scale off one consistent transition; the pure `WeaponScale` core and its config are
 unaffected by that reconciliation (only the two lines in step 3 change).
+
+---
+
+## 13. Item blocklist (and-elf/mod-reforge#5)
+
+Some items must never be reforgeable (legendaries, heirlooms, a hand-picked list of specific drops, a
+whole armour material, a slot). The blocklist is **config-driven** and evaluated on **three
+independent axes** that combine with **OR** — an item is blocked if it matches **any** axis:
+
+1. **By item entry id** — `Reforge.Blocklist.ItemIds` (CSV of `item_template.entry`), e.g. `"49623,50735"`.
+2. **By equip slot** — `Reforge.Blocklist.Slots` (CSV of slot names, reusing the core `EquipSlot`
+   vocabulary), e.g. `"trinket,ranged"`.
+3. **By item type**, split into two sub-lists (the issue's "separate configuration for ids and type"):
+   - `Reforge.Blocklist.Qualities` — CSV of item-quality names (`poor, common, uncommon, rare, epic,
+     legendary, artifact, heirloom`; WoW `ItemQualities` ordinals 0–7), e.g. `"legendary,heirloom"`.
+   - `Reforge.Blocklist.ArmorClasses` — CSV of armour-material names (`cloth, leather, mail, plate`),
+     e.g. `"cloth"`.
+
+**Why this "by type" set.** Quality and armour-class are the two type dimensions an operator actually
+wants to protect in bulk: quality guards *legendaries/heirlooms* (the classic "don't let players
+rebalance a legendary" case) and armour-class lets a realm exclude an entire material. Both map cleanly
+onto proto fields (`Quality`, weapon/armour `SubClass`) and onto vocabularies that already exist (the
+core `ArmorClass` enum; WoW's fixed quality ordinals). Inventory-type category is already covered by the
+slot axis, so a separate inventory-type list would only duplicate it.
+
+### Split (pure core owns the decision)
+
+- **Pure core `core/reforge/Blocklist.{h,cpp}`** — the decision + the tolerant CSV parsers, POD in/out,
+  unit-tested exhaustively with no worldserver:
+  - `struct BlockKey { uint32 entry; EquipSlot slot; ArmorClass armor; uint8 quality; }` — the item
+    reduced to the blockable facts.
+  - `struct BlockPolicy { vector<uint32> itemIds; vector<EquipSlot> slots; vector<ArmorClass>
+    armorClasses; vector<uint8> qualities; }` — the parsed config lists.
+  - `bool IsBlocked(BlockKey const&, BlockPolicy const&)` — OR across the four lists. An empty policy
+    blocks nothing; `EquipSlot::None` / `ArmorClass::None` in the key match only if explicitly listed.
+  - Parsers (mirror `Currency.cpp`'s tolerant style — malformed tokens dropped, never throw):
+    `ParseIdList` (CSV of `uint32`, drops `0`/malformed), `ParseSlotList` / `SlotFromName` (EquipSlot is
+    a core enum), `ParseArmorClassList` / `ArmorClassFromName` (ArmorClass is a core enum).
+  - Quality **names** are the one thing the core cannot own without hardcoding an AzerothCore enum, so
+    quality name→ordinal parsing lives in the adapter (below); the core's quality axis is purely numeric.
+- **Adapter `ServerReforgeConfig`** — snapshots the four `Reforge.Blocklist.*` options on load/reload
+  into a `BlockPolicy` (item ids / slots / armour classes via the core parsers; qualities via a
+  name→ordinal map that references AC's `ItemQualities` enum — the ADAPTER is the only place that enum
+  appears). Exposes `bool IsItemBlocked(ItemTemplate const*)` which builds a `BlockKey` (entry =
+  `ItemId`, slot from `InventoryType`, armour from `SubClass`, quality from `Quality`) and calls the
+  pure `IsBlocked`. The `InventoryType → EquipSlot` bridge lives in `ReforgeStatMap` (the AC-enum
+  bridge layer).
+- **Enforcement.** `ReforgeMgr::ApplyReforge` gains an early guard (after the enabled/near-NPC checks)
+  returning `"This item cannot be reforged."` when `IsItemBlocked` is true — so the NPC, command and
+  addon paths are all covered by one check. `ReforgeGossipScripts::SendMain` additionally hides blocked
+  items from the reforge NPC menu, so a blocked item never even appears as reforgeable.
+
+Sensible defaults are empty on every axis, so nothing is blocked out of the box.

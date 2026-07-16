@@ -28,6 +28,10 @@ namespace Reforge
     // server the archetype does not gate legality (ServerReforgeConfig ignores it); a host module may.
     ItemChassis BuildChassis(ItemTemplate const* proto);
 
+    // Map an AzerothCore InventoryType (see ItemTemplate.h) to the core EquipSlot bucket, or
+    // EquipSlot::None for a non-equippable / uncategorised type. The ONE InventoryType->slot bridge.
+    EquipSlot SlotFromInventoryType(uint32_t inventoryType);
+
     // Short, stable, lower-case name for a stat ("hit", "spellpower", …) — used in config, chat
     // commands, gossip labels and the addon. "?" for COUNT / out of range.
     char const* StatName(ItemStat stat);

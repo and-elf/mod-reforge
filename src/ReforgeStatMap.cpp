@@ -98,7 +98,38 @@ namespace Reforge
         // Archetype is not used for legality on a bare server (ServerReforgeConfig ignores it); leave
         // the default. A host module can re-derive it when it drives re-itemisation.
         chassis.archetype = ItemArchetype::CasterDps;
+        chassis.slot = SlotFromInventoryType(proto->InventoryType);
         return chassis;
+    }
+
+    EquipSlot SlotFromInventoryType(uint32_t inventoryType)
+    {
+        switch (inventoryType)
+        {
+            case INVTYPE_HEAD:           return EquipSlot::Head;
+            case INVTYPE_NECK:           return EquipSlot::Neck;
+            case INVTYPE_SHOULDERS:      return EquipSlot::Shoulder;
+            case INVTYPE_CHEST:
+            case INVTYPE_ROBE:           return EquipSlot::Chest;
+            case INVTYPE_WAIST:          return EquipSlot::Waist;
+            case INVTYPE_LEGS:           return EquipSlot::Legs;
+            case INVTYPE_FEET:           return EquipSlot::Feet;
+            case INVTYPE_WRISTS:         return EquipSlot::Wrist;
+            case INVTYPE_HANDS:          return EquipSlot::Hands;
+            case INVTYPE_FINGER:         return EquipSlot::Finger;
+            case INVTYPE_TRINKET:        return EquipSlot::Trinket;
+            case INVTYPE_CLOAK:          return EquipSlot::Cloak;
+            case INVTYPE_SHIELD:         return EquipSlot::Shield;
+            case INVTYPE_WEAPON:
+            case INVTYPE_WEAPONMAINHAND:
+            case INVTYPE_WEAPONOFFHAND:
+            case INVTYPE_HOLDABLE:       return EquipSlot::OneHand;
+            case INVTYPE_2HWEAPON:       return EquipSlot::TwoHand;
+            case INVTYPE_RANGED:
+            case INVTYPE_RANGEDRIGHT:
+            case INVTYPE_THROWN:         return EquipSlot::Ranged;
+            default:                     return EquipSlot::None;
+        }
     }
 
     char const* StatName(ItemStat stat)

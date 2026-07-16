@@ -1,7 +1,10 @@
 #include "ServerReforgeConfig.h"
 #include "ReforgeStatMap.h"
 #include "Configuration/Config.h"
+#include "ItemTemplate.h"
+#include "SharedDefines.h"
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <sstream>
 
@@ -9,6 +12,38 @@ namespace Reforge
 {
     namespace
     {
+        // Quality name -> WoW ItemQualities ordinal. This is the ONE place the AzerothCore ItemQualities
+        // enum is used for the blocklist (the pure core's quality axis is purely numeric — §12). Returns
+        // nullopt for an unknown name; also accepts a raw numeric ordinal.
+        std::optional<uint8_t> QualityFromName(std::string_view raw)
+        {
+            std::string key;
+            key.reserve(raw.size());
+            for (char const c : raw)
+                if (!std::isspace(static_cast<unsigned char>(c)))
+                    key.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+            if (key.empty())
+                return std::nullopt;
+
+            if (key == "poor" || key == "grey" || key == "gray")   return ITEM_QUALITY_POOR;
+            if (key == "common" || key == "normal" || key == "white") return ITEM_QUALITY_NORMAL;
+            if (key == "uncommon" || key == "green")               return ITEM_QUALITY_UNCOMMON;
+            if (key == "rare" || key == "blue")                    return ITEM_QUALITY_RARE;
+            if (key == "epic" || key == "purple")                  return ITEM_QUALITY_EPIC;
+            if (key == "legendary" || key == "orange")             return ITEM_QUALITY_LEGENDARY;
+            if (key == "artifact")                                 return ITEM_QUALITY_ARTIFACT;
+            if (key == "heirloom")                                 return ITEM_QUALITY_HEIRLOOM;
+
+            // Also accept a raw numeric ordinal (0..7).
+            if (key.find_first_not_of("0123456789") == std::string::npos)
+            {
+                unsigned long const value = std::stoul(key);
+                if (value <= ITEM_QUALITY_HEIRLOOM)
+                    return static_cast<uint8_t>(value);
+            }
+            return std::nullopt;
+        }
+
         // The default reforge-eligible set: retail's secondary combat ratings (source AND destination).
         // Primaries (str/agi/sta/int) and spellpower/attackpower are excluded so a reforge only ever
         // rebalances "spare" secondaries, never core power.
@@ -34,6 +69,19 @@ namespace Reforge
         int32_t const delta = static_cast<int32_t>(toLevel) - static_cast<int32_t>(fromLevel);
         double const factor = std::pow(1.0 + _weaponScalePerLevel, static_cast<double>(delta));
         return std::clamp(factor, _weaponScaleMinFactor, _weaponScaleMaxFactor);
+    }
+
+    bool ServerReforgeConfig::IsItemBlocked(ItemTemplate const* proto) const
+    {
+        if (!proto)
+            return false;
+
+        BlockKey key;
+        key.entry = proto->ItemId;
+        key.slot = SlotFromInventoryType(proto->InventoryType);
+        key.armor = BuildChassis(proto).armor;
+        key.quality = static_cast<uint8_t>(proto->Quality);
+        return IsBlocked(key, _blockPolicy);
     }
 
     void ServerReforgeConfig::Load()
@@ -76,5 +124,20 @@ namespace Reforge
         _currencies = ParseCurrencyCosts(currencyRaw);
         if (_currencies.empty())
             _currencies = ParseCurrencyCosts(DefaultCurrencies);   // never leave the player unable to pay
+
+        // Blocklist (§13): three OR-combined axes, all empty by default so nothing is blocked. Item
+        // ids, slots and armour classes parse in the pure core; quality names resolve here (ItemQualities).
+        _blockPolicy = BlockPolicy{};
+        _blockPolicy.itemIds = ParseIdList(sConfigMgr->GetOption<std::string>("Reforge.Blocklist.ItemIds", ""));
+        _blockPolicy.slots = ParseSlotList(sConfigMgr->GetOption<std::string>("Reforge.Blocklist.Slots", ""));
+        std::string const armorRaw = sConfigMgr->GetOption<std::string>("Reforge.Blocklist.ArmorClasses", "");
+        _blockPolicy.armorClasses = ParseArmorClassList(armorRaw);
+
+        std::string const qualityRaw = sConfigMgr->GetOption<std::string>("Reforge.Blocklist.Qualities", "");
+        std::stringstream qss(qualityRaw);
+        std::string qtoken;
+        while (std::getline(qss, qtoken, ','))
+            if (std::optional<uint8_t> const quality = QualityFromName(qtoken))
+                _blockPolicy.qualities.push_back(*quality);
     }
 }
