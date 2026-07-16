@@ -127,3 +127,52 @@ Reforge.WeaponScale.MinFactor = 0.1
 #
 
 Reforge.WeaponScale.MaxFactor = 10.0
+
+#
+# Blocklist -- prevent certain items from being reforged.
+#
+# Three independent axes, combined with OR: an item is blocked if it matches ANY of them. All are
+# empty by default, so nothing is blocked out of the box. A blocked item cannot be reforged from the
+# NPC, a command or the addon, and it is hidden from the reforge NPC's item menu entirely.
+#
+
+#
+#    Reforge.Blocklist.ItemIds
+#        Description: CSV of item_template.entry ids that may never be reforged. Empty = none.
+#        Example:     "49623,50735"   (Shadowmourne, Val'anyr)
+#        Default:     ""
+#
+
+Reforge.Blocklist.ItemIds = ""
+
+#
+#    Reforge.Blocklist.Slots
+#        Description: CSV of equip slots whose items may never be reforged. Names: head, neck,
+#                     shoulder, chest, wrist, hands, waist, legs, feet, finger, trinket, cloak,
+#                     shield, onehand, twohand, ranged (aliases: ring, back, gloves, boots, belt,
+#                     bracers, 1h, 2h). Empty = none.
+#        Example:     "trinket,ranged"
+#        Default:     ""
+#
+
+Reforge.Blocklist.Slots = ""
+
+#
+#    Reforge.Blocklist.Qualities
+#        Description: CSV of item qualities (rarities) that may never be reforged. Names: poor,
+#                     common, uncommon, rare, epic, legendary, artifact, heirloom. Empty = none.
+#        Example:     "legendary,heirloom"
+#        Default:     ""
+#
+
+Reforge.Blocklist.Qualities = ""
+
+#
+#    Reforge.Blocklist.ArmorClasses
+#        Description: CSV of armour materials whose items may never be reforged. Names: cloth,
+#                     leather, mail, plate. Empty = none.
+#        Example:     "cloth"
+#        Default:     ""
+#
+
+Reforge.Blocklist.ArmorClasses = ""

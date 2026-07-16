@@ -119,6 +119,12 @@ namespace Reforge
         }
 
         ItemTemplate const* proto = item->GetTemplate();
+        if (_config.IsItemBlocked(proto))
+        {
+            outMsg = "This item cannot be reforged.";
+            return false;
+        }
+
         StatBlock const block = BuildStatBlock(proto);
         ItemChassis const chassis = BuildChassis(proto);
 

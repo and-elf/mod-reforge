@@ -1,12 +1,15 @@
 #ifndef MOD_REFORGE_SRC_SERVERREFORGECONFIG_H
 #define MOD_REFORGE_SRC_SERVERREFORGECONFIG_H
 
+#include "reforge/Blocklist.h"
 #include "reforge/Currency.h"
 #include "reforge/ReforgeConfig.h"
 #include <array>
 #include <cstdint>
 #include <string>
 #include <vector>
+
+class ItemTemplate;
 
 namespace Reforge
 {
@@ -48,6 +51,11 @@ namespace Reforge
         // Whether `stat` may be a reforge source/destination (the fixed, config-tunable eligible set).
         bool IsLegalStat(ItemStat stat) const;
 
+        // Whether `proto` is on the reforge blocklist (§12): blocked by entry id, equip slot, armour
+        // class, or quality (OR). Builds a BlockKey and delegates to the pure-core IsBlocked. A null
+        // proto is never blocked. Used by ReforgeMgr::ApplyReforge and the NPC gossip menu.
+        bool IsItemBlocked(ItemTemplate const* proto) const;
+
         // Accepted ways to pay a reforge, in configured order (entry 0 = gold). See §10.
         std::vector<CurrencyCost> const& AcceptedCurrencies() const { return _currencies; }
 
@@ -65,6 +73,7 @@ namespace Reforge
         double _weaponScaleMaxFactor = 10.0;
         std::array<bool, static_cast<std::size_t>(ItemStat::COUNT)> _legal{};
         std::vector<CurrencyCost> _currencies;
+        BlockPolicy _blockPolicy;
     };
 }
 

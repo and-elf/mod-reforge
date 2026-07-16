@@ -71,6 +71,10 @@ namespace
             if (!item)
                 continue;
 
+            // Blocklisted items (§12) are never reforgeable, so keep them out of the menu entirely.
+            if (cfg.IsItemBlocked(item->GetTemplate()))
+                continue;
+
             StatBlock const block = BuildStatBlock(item->GetTemplate());
             bool hasSource = false;
             for (std::size_t i = 0; i < static_cast<std::size_t>(ItemStat::COUNT); ++i)
